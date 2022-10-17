@@ -1,0 +1,29 @@
+#version 430
+
+// input
+in vec3 a0;
+in vec2 a1; // texcoord0
+in vec3 a2; // normal
+in vec3 a3; // tangent
+in vec3 a4; // bitangent
+
+out vec2 texcoord0;
+out vec3 worldPos;
+out vec3 normal;
+out vec3 tangent;
+out vec3 bitangent;
+
+uniform mat4 mvp;
+uniform mat4 localTransform;
+
+void main()
+{
+	worldPos = (localTransform * vec4(a0, 1.0)).xyz;
+
+	gl_Position = mvp * vec4(worldPos, 1.0);
+	texcoord0 = a1;
+	
+	normal = mat3(localTransform) * a2;
+	tangent = mat3(localTransform) * a3;
+	bitangent = mat3(localTransform) * a4;
+}

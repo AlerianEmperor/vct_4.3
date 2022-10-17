@@ -1,0 +1,56 @@
+#version 430
+
+in VSOutput
+{
+	vec2 texcoord0;
+	vec3 normal;
+	vec3 lightVec;
+	vec4 ndcPos;
+} vs_out;
+
+#ifdef VOXELIZE
+layout(binding = 0, rgba8) uniform image3D voxelColor;
+uniform mat4 storageTransform;
+#else
+out vec4 fragDataOut0; // color
+#endif
+
+uniform sampler2D sampler0; // diffuse
+
+uniform vec3 lightColor;
+uniform float lightFalloff;
+
+
+void main()
+{
+	vec4 diffuseTex = texture(sampler0, vs_out.texcoord0);
+
+	/*vec3 worldNormal = normalize(vs_out.normal);
+	
+	float lightDist2 = dot(vs_out.lightVec, vs_out.lightVec);
+	vec3 lightDir = vs_out.lightVec * inversesqrt(lightDist2);
+	
+	float lightDiffuse = clamp(dot(lightDir, worldNormal), 0.0, 1.0);
+	lightDiffuse *= clamp(1.0 - lightDist2 * lightFalloff, 0.0, 1.0);
+	
+	vec3 ambient = vec3(.4);
+	
+	vec4 outColor;
+	outColor.xyz = diffuseTex.xyz * (lightColor * lightDiffuse + ambient);
+	outColor.w = diffuseTex.w;*/
+	
+	vec4 outColor = diffuseTex;
+	
+#ifdef VOXELIZE
+	vec4 storagePos = storageTransform * vs_out.ndcPos;
+	storagePos.xyz *= 1.0 / storagePos.w;
+	
+	ivec3 voxelPos = ivec3(imageSize(voxelColor) * (storagePos.xyz * .5 + .5));
+
+	// compress outColor range to encode limited HDR
+	outColor.xyz *= .5;
+	imageStore(voxelColor, voxelPos, outColor);
+#else
+	fragDataOut0 = outColor;
+#endif
+}

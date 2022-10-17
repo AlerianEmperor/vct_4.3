@@ -1,0 +1,59 @@
+#version 430
+
+// input
+in vec4 a0;
+in vec2 a1; // texcoord0
+in vec3 a2; // normal
+in vec4 a3; // position offset (scale packed into w)
+in vec4 a4; // rotation quaternion
+
+out VSOutput
+{
+	vec2 texcoord0;
+	vec3 normal;
+	vec3 lightVec;
+	vec4 ndcPos;
+} vs_out;
+
+uniform mat4 mvp;
+uniform vec3 lightPos;
+
+
+mat4 buildTransform(vec4 posScale, vec4 quatRotation)
+{
+	// build a matrix from translation, quaternion rotation, and uniform scale
+	float x2 = quatRotation.x + quatRotation.x;
+	float y2 = quatRotation.y + quatRotation.y;
+	float z2 = quatRotation.z + quatRotation.z;
+	float xx = quatRotation.x * x2;
+	float yy = quatRotation.y * y2;
+	float zz = quatRotation.z * z2;
+	float xy = quatRotation.x * y2;
+	float yz = quatRotation.y * z2;
+	float xz = quatRotation.z * x2;
+	float wx = quatRotation.w * x2;
+	float wy = quatRotation.w * y2;
+	float wz = quatRotation.w * z2;
+
+	return
+		mat4(	(1 - (yy + zz)) * posScale.w, (xy + wz) * posScale.w, (xz - wy) * posScale.w, 0,
+				(xy - wz) * posScale.w, (1 - (xx + zz)) * posScale.w, (yz + wx) * posScale.w, 0,
+				(xz + wy) * posScale.w, (yz - wx) * posScale.w, (1 - (xx + yy)) * posScale.w, 0,
+				posScale.x, posScale.y, posScale.z, 1);
+}
+
+void main()
+{
+	mat4 localTransform = buildTransform(a3, a4);
+	
+	vec4 worldPos = localTransform * a0;
+	
+	vs_out.ndcPos = mvp * worldPos;
+	gl_Position = vs_out.ndcPos;
+	
+	vs_out.texcoord0 = a1;
+	
+	vs_out.normal = mat3(localTransform) * a2;
+	
+	vs_out.lightVec = lightPos - worldPos.xyz;
+}

@@ -1,0 +1,54 @@
+#version 120
+
+// nvidia GLSL options
+//#pragma optionNV(fastmath on)
+//#pragma optionNV(fastprecision on)
+//#pragma optionNV(ifcvt none)
+//#pragma optionNV(inline all)
+//#pragma optionNV(strict on)
+#pragma optionNV(unroll all)
+
+varying vec2 texcoord0;
+varying vec2 texcoord1;
+varying vec4 color;
+
+uniform sampler2D sampler0;
+
+uniform vec3 glowParams;
+uniform vec4 glowColor;
+
+void main()
+{
+	float distanceSample = texture2D(sampler0, texcoord0).x;
+	float glowDistanceSample = texture2D(sampler0, texcoord1).x;
+
+	// smoothstep
+	// t = SAT((x - edge0)/(edge1 - edge0))
+	// t * t * (3 - 2 * t)
+	
+	float aaRange = dot(fwidth(texcoord0), vec2(.5)) * 12.0;
+	float aaBias = aaRange - .5;
+	float aaScale = .5 / aaRange;
+	
+	// soft edge
+	float alpha = distanceSample;
+	alpha += aaBias;
+	alpha = clamp(alpha * aaScale, 0.0, 1.0);
+	alpha = alpha * alpha * (3.0 - 2.0 * alpha);
+
+	// glow
+	float glowBias = aaRange * glowParams.z - .5;
+	float glowScale = aaScale / glowParams.z;
+	float glowAlpha = glowDistanceSample;
+	glowAlpha += glowBias;
+	glowAlpha = clamp(glowAlpha * glowScale, 0.0, 1.0);
+	glowAlpha = glowAlpha * glowAlpha * (3.0 - 2.0 * glowAlpha);
+	glowAlpha *= glowColor.w;
+
+	// premultiplied alpha
+	gl_FragColor.xyz = color.w * (color.xyz * alpha + glowColor.xyz * (glowAlpha * (1.0 - alpha)));
+	gl_FragColor.w = color.w * max(alpha, glowAlpha);
+
+	//if (gl_FragColor.w <= 0.0)
+	//	discard;
+}

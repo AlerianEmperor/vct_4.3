@@ -1,0 +1,194 @@
+#version 430
+
+in vec2 texcoord0;
+in vec3 worldPos;
+in vec3 normal;
+in vec3 tangent;
+in vec3 bitangent;
+
+out vec4 fragDataOut0; // color
+
+uniform sampler2D sampler0; // diffuse
+uniform sampler2D sampler1; // normal
+uniform sampler2D sampler2; // specular
+
+uniform sampler2D sampler15; // shadow map
+uniform mat4 shadowMVP;
+
+uniform vec3 primaryLightDir;
+uniform vec3 primaryLightColor;
+
+uniform vec3 cameraPos;
+
+uniform float minVoxelDiameter;
+uniform float minVoxelDiameterInv;
+
+layout(binding = 3) uniform sampler3D voxelTex[6];
+uniform mat4 worldToVoxelTex;
+
+
+// pos and dir are in texture space
+// dir is the direction from the center of the voxel outward
+// dir should be normalized
+vec4 voxelFetch(vec3 pos, vec3 dir, float lod)
+{
+	vec4 sampleX =
+		dir.x < 0.0
+		? textureLod(voxelTex[0], pos, lod)
+		: textureLod(voxelTex[1], pos, lod);
+	
+	vec4 sampleY =
+		dir.y < 0.0
+		? textureLod(voxelTex[2], pos, lod)
+		: textureLod(voxelTex[3], pos, lod);
+	
+	vec4 sampleZ =
+		dir.z < 0.0
+		? textureLod(voxelTex[4], pos, lod)
+		: textureLod(voxelTex[5], pos, lod);
+	
+	vec3 sampleWeights = abs(dir);
+	float invSampleMag = 1.0 / (sampleWeights.x + sampleWeights.y + sampleWeights.z + .0001);
+	sampleWeights *= invSampleMag;
+	
+	vec4 filtered = 
+		sampleX * sampleWeights.x
+		+ sampleY * sampleWeights.y
+		+ sampleZ * sampleWeights.z;
+	
+	return filtered;
+}
+
+// origin, dir, and maxDist are in texture space
+// dir should be normalized
+// coneRatio is the cone diameter to height ratio (2.0 for 90-degree cone)
+vec4 voxelTraceCone(vec3 origin, vec3 dir, float coneRatio, float maxDist)
+{
+	vec3 samplePos = origin;
+	vec4 accum = vec4(0.0);
+
+	// the starting sample diameter
+	float minDiameter = minVoxelDiameter;
+
+	// push out the starting point to avoid self-intersection
+	float startDist = minDiameter;
+	
+	float dist = startDist;
+	while (dist <= maxDist && accum.w < 1.0)
+	{
+		// ensure the sample diameter is no smaller than the min
+		// desired diameter for this cone (ensuring we always
+		// step at least minDiameter each iteration, even for tiny
+		// cones - otherwise lots of overlapped samples)
+		float sampleDiameter = max(minDiameter, coneRatio * dist);
+		
+		// convert diameter to LOD
+		// for example:
+		// log2(1/256 * 256) = 0
+		// log2(1/128 * 256) = 1
+		// log2(1/64 * 256) = 2
+		float sampleLOD = log2(sampleDiameter * minVoxelDiameterInv);
+		
+		vec3 samplePos = origin + dir * dist;
+		
+		vec4 sampleValue = voxelFetch(samplePos, -dir, sampleLOD);
+		
+		float sampleWeight = (1.0 - accum.w);
+		accum += sampleValue * sampleWeight;
+		
+		dist += sampleDiameter;
+	}
+	
+	// decompress color range to decode limited HDR
+	accum.xyz *= 2.0;
+	
+	return accum;
+}
+
+float CalcShadowing(vec3 worldPos)
+{
+	vec4 shadowPos = shadowMVP * vec4(worldPos, 1.0);
+	// finish projection
+	shadowPos.w = 1.0 / shadowPos.w;
+	shadowPos.xyz *= shadowPos.w;
+	// [-1, 1] to [0, 1]
+	shadowPos.xyz = shadowPos.xyz * .5 + .5;
+	
+	float shadowSample = texture2D(sampler15, shadowPos.xy).x;
+	// compare and weight with bias
+	shadowSample = shadowSample + .0025 - shadowPos.z;
+	shadowSample = shadowSample < 0.0 ? 0.0 : 1.0;
+	
+	return shadowSample;
+}
+
+void main()
+{
+// fetch textures
+	vec4 diffuseTex = texture(sampler0, texcoord0);
+#ifdef ENABLE_ALPHA_TEST
+	if (diffuseTex.a < .5)
+		discard;
+#endif
+#ifdef DEPTH_ONLY
+	return;
+#endif
+
+	vec4 normalTex = texture(sampler1, texcoord0);
+	vec4 specularTex = texture(sampler2, texcoord0);
+
+// decode normal
+	mat3 tbn = mat3(tangent, bitangent, normal);
+	
+	vec3 tsNormal = normalTex.xyz * 2.0 - 1.0;
+	vec3 bumpNormal = normalize(tbn * tsNormal);
+	
+// direct lighting
+	float shadowing = CalcShadowing(worldPos);
+	
+	float lightingNL = clamp(dot(bumpNormal, primaryLightDir), 0.0, 1.0);
+	vec3 diffuseLight = primaryLightColor * (lightingNL * shadowing);
+	
+// position of fragment in voxel texture space
+	vec4 voxelPos = worldToVoxelTex * vec4(worldPos, 1.0);
+	voxelPos.xyz *= 1.0 / voxelPos.w;
+	
+// specular reflection
+// TODO: don't shoot specular rays for surfaces where specular is
+// masked out
+	vec3 specularLight;
+	{
+		vec3 eyeToFragment = normalize(worldPos - cameraPos);
+		//vec3 reflectionDir = reflect(eyeToFragment, normal);
+		vec3 reflectionDir = reflect(eyeToFragment, bumpNormal);
+		
+		vec3 reflectTraceOrigin = voxelPos.xyz;
+		float coneRatio = .2;
+		float maxDist = .3;
+		specularLight = voxelTraceCone(reflectTraceOrigin, reflectionDir, coneRatio, maxDist).xyz;
+	}
+	
+// indirect diffuse
+	vec3 iblDiffuse = vec3(0.0);
+	{
+		float iblConeRatio = 1.0;
+		float iblMaxDist = .3;
+		// this sample gets full weight (dot(normal, normal) == 1)
+		iblDiffuse += voxelTraceCone(voxelPos.xyz, bumpNormal, iblConeRatio, iblMaxDist).xyz;
+		// these samples get partial weight
+		iblDiffuse += .707 * voxelTraceCone(voxelPos.xyz, normalize(bumpNormal + tangent), iblConeRatio, iblMaxDist).xyz;
+		iblDiffuse += .707 * voxelTraceCone(voxelPos.xyz, normalize(bumpNormal - tangent), iblConeRatio, iblMaxDist).xyz;
+		iblDiffuse += .707 * voxelTraceCone(voxelPos.xyz, normalize(bumpNormal + bitangent), iblConeRatio, iblMaxDist).xyz;
+		iblDiffuse += .707 * voxelTraceCone(voxelPos.xyz, normalize(bumpNormal - bitangent), iblConeRatio, iblMaxDist).xyz;
+	}
+
+	fragDataOut0.xyz =
+		(diffuseLight + iblDiffuse) * diffuseTex.xyz
+		+ specularLight * specularTex.xyz
+		;
+	fragDataOut0.w = 1.0;
+	
+//fragDataOut0.xyz = diffuseLight;
+//fragDataOut0.xyz = iblDiffuse;
+//fragDataOut0.xyz = specularLight;
+}

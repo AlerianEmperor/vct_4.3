@@ -1,0 +1,19 @@
+#version 120
+
+varying vec4 color;
+varying vec2 texcoord0;
+
+#ifdef USE_TEXTURE
+uniform sampler2D sampler0; // automatically bound to GL_TEXTURE0 slot
+//uniform sampler2D sampler1; // GL_TEXTURE1, etc.
+#endif
+
+void main()
+{
+	vec4 outColor = color;
+#ifdef USE_TEXTURE
+	outColor *= texture2D(sampler0, texcoord0);
+#endif
+
+	gl_FragColor = outColor;
+}

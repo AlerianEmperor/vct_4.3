@@ -1,0 +1,18 @@
+#version 120
+
+// input
+attribute vec4 a0;
+attribute vec4 a1; // color
+attribute vec2 a2; // texcoord0
+
+varying vec4 color;
+varying vec2 texcoord0;
+
+uniform mat4 mvp;
+
+void main()
+{
+	gl_Position = mvp * a0;
+	color = a1;
+	texcoord0 = a2;
+}
